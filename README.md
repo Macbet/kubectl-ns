@@ -1,18 +1,12 @@
-# sample-cli-plugin
+# kubectl-ns
 
 This repository implements a single kubectl plugin for switching the namespace
 that the current KUBECONFIG context points to. In order to remain as indestructive
-as possible, no existing contexts are modified.
+as possible, no previously existing contexts are modified.
 
-**Note:** go-get or vendor this package as `k8s.io/sample-cli-plugin`.
+**Note:** go-get or vendor this package as `k8s.io/kubectl-ns`.
 
-This particular example demonstrates how to perform basic operations such as:
-
-* How to create a new custom command that follows kubectl patterns
-* How to obtain a user's KUBECONFIG settings and modify them
-* How to make general use of the provided "cli-runtime" set of helpers for kubectl and third-party plugins
-
-It makes use of the genericclioptions in [k8s.io/cli-runtime](https://github.com/kubernetes/cli-runtime)
+This repository makes use of the genericclioptions in [k8s.io/cli-runtime](https://github.com/kubernetes/cli-runtime)
 to generate a set of configuration flags which are in turn used to generate a raw representation of
 the user's KUBECONFIG, as well as to obtain configuration which can be used with RESTClients when sending
 requests to a kubernetes api server.
@@ -25,7 +19,7 @@ In order to be as non-destructive as possible, no existing contexts are modified
 
 ## Purpose
 
-This is an example of how to build a kubectl plugin using the same set of tools and helpers available to kubectl.
+This is a fully-working example of how to build a kubectl plugin using the same set of tools and helpers available to kubectl.
 
 ## Running
 
@@ -58,6 +52,9 @@ that kubectl points to.
 It can also be used as a means of showcasing usage of the cli-runtime set of utilities to aid in
 third-party plugin development.
 
+This plugin's functionality is similar to that of the [oc project](https://github.com/openshift/origin/blob/master/docs/cli.md#oc-project) command.
+This plugin has been tested against OpenShift and Kubernetes clusters using `kubectl`.
+
 ## Cleanup
 
 You can "uninstall" this plugin from kubectl by simply removing it from your PATH:
@@ -71,7 +68,6 @@ k8s.io/client-go.
 
 ## Where does it come from?
 
-`sample-cli-plugin` is synced from
-https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/sample-cli-plugin.
-Code changes are made in that location, merged into k8s.io/kubernetes and
-later synced here.
+This plugin is a fork of the [sample-cli-plugin](https://github.com/kubernetes/sample-cli-plugin).
+It is maintained and updated here, as a separate effort, in order to make it available through plugin managers, such
+as [Krew](https://github.com/GoogleContainerTools/krew).
