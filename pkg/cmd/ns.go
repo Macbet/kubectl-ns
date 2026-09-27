@@ -17,31 +17,32 @@ limitations under the License.
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"k8s.io/cli-runtime/pkg/genericiooptions"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
-
-	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
-var (
-	namespaceExample = `
+const namespaceExample = `
 	# view the current namespace in your KUBECONFIG
-	%[1]s ns
+	%[1]s
 
 	# view all of the namespaces in use by contexts in your KUBECONFIG
-	%[1]s ns --list
+	%[1]s --list
 
 	# switch your current-context to one that contains the desired namespace
-	%[1]s ns foo
+	%[1]s foo
 `
 
-	errNoContext = fmt.Errorf("no context is currently set, use %q to select a new one", "kubectl config use-context <context>")
-)
+var errNoContext = fmt.Errorf("no context is currently set, use %q to select a new one", "kubectl config use-context <context>")
 
 // NamespaceOptions provides information required to update
 // the current context on a user's KUBECONFIG
@@ -51,48 +52,40 @@ type NamespaceOptions struct {
 	resultingContext     *api.Context
 	resultingContextName string
 
-	userSpecifiedCluster   string
-	userSpecifiedContext   string
-	userSpecifiedAuthInfo  string
-	userSpecifiedNamespace string
-
 	rawConfig      api.Config
 	listNamespaces bool
-	args           []string
 
-	genericclioptions.IOStreams
+	genericiooptions.IOStreams
 }
 
 // NewNamespaceOptions provides an instance of NamespaceOptions with default values
-func NewNamespaceOptions(streams genericclioptions.IOStreams) *NamespaceOptions {
+func NewNamespaceOptions(streams genericiooptions.IOStreams) *NamespaceOptions {
 	return &NamespaceOptions{
-		configFlags: genericclioptions.NewConfigFlags(),
-
-		IOStreams: streams,
+		configFlags: genericclioptions.NewConfigFlags(true),
+		IOStreams:   streams,
 	}
 }
 
-// NewCmdNamespace provides a cobra command wrapping NamespaceOptions
-func NewCmdNamespace(streams genericclioptions.IOStreams) *cobra.Command {
+// NewCmdNamespace provides a cobra command wrapping NamespaceOptions.
+// name is the plugin name as typed after "kubectl", e.g. "ns" or "change-ns".
+func NewCmdNamespace(name string, streams genericiooptions.IOStreams) *cobra.Command {
 	o := NewNamespaceOptions(streams)
 
 	cmd := &cobra.Command{
-		Use:          "ns [new-namespace] [flags]",
+		Use:          name + " [new-namespace] [flags]",
 		Short:        "View or set the current namespace",
-		Example:      fmt.Sprintf(namespaceExample, "kubectl"),
+		Example:      fmt.Sprintf(namespaceExample, "kubectl "+name),
+		Annotations:  map[string]string{cobra.CommandDisplayNameAnnotation: "kubectl " + name},
+		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
-		RunE: func(c *cobra.Command, args []string) error {
-			if err := o.Complete(c, args); err != nil {
+		RunE: func(_ *cobra.Command, args []string) error {
+			if err := o.Complete(args); err != nil {
 				return err
 			}
 			if err := o.Validate(); err != nil {
 				return err
 			}
-			if err := o.Run(); err != nil {
-				return err
-			}
-
-			return nil
+			return o.Run()
 		},
 	}
 
@@ -103,46 +96,25 @@ func NewCmdNamespace(streams genericclioptions.IOStreams) *cobra.Command {
 }
 
 // Complete sets all information required for updating the current context
-func (o *NamespaceOptions) Complete(cmd *cobra.Command, args []string) error {
-	o.args = args
-
+func (o *NamespaceOptions) Complete(args []string) error {
 	var err error
 	o.rawConfig, err = o.configFlags.ToRawKubeConfigLoader().RawConfig()
 	if err != nil {
 		return err
 	}
 
-	o.userSpecifiedNamespace, err = cmd.Flags().GetString("namespace")
-	if err != nil {
-		return err
-	}
+	namespace := *o.configFlags.Namespace
 	if len(args) > 0 {
-		if len(o.userSpecifiedNamespace) > 0 {
-			return fmt.Errorf("cannot specify both a --namespace value and a new namespace argument")
+		if namespace != "" {
+			return errors.New("cannot specify both a --namespace value and a new namespace argument")
 		}
-
-		o.userSpecifiedNamespace = args[0]
+		namespace = args[0]
 	}
 
 	// if no namespace argument or flag value was specified, then there
 	// is no need to generate a resulting context
-	if len(o.userSpecifiedNamespace) == 0 {
+	if namespace == "" {
 		return nil
-	}
-
-	o.userSpecifiedContext, err = cmd.Flags().GetString("context")
-	if err != nil {
-		return err
-	}
-
-	o.userSpecifiedCluster, err = cmd.Flags().GetString("cluster")
-	if err != nil {
-		return err
-	}
-
-	o.userSpecifiedAuthInfo, err = cmd.Flags().GetString("user")
-	if err != nil {
-		return err
 	}
 
 	currentContext, exists := o.rawConfig.Contexts[o.rawConfig.CurrentContext]
@@ -156,96 +128,85 @@ func (o *NamespaceOptions) Complete(cmd *cobra.Command, args []string) error {
 
 	// if a target context is explicitly provided by the user,
 	// use that as our reference for the final, resulting context
-	if len(o.userSpecifiedContext) > 0 {
-		o.resultingContextName = o.userSpecifiedContext
-		if userCtx, exists := o.rawConfig.Contexts[o.userSpecifiedContext]; exists {
+	if userContext := *o.configFlags.Context; userContext != "" {
+		o.resultingContextName = userContext
+		if userCtx, exists := o.rawConfig.Contexts[userContext]; exists {
 			o.resultingContext = userCtx.DeepCopy()
 		}
 	}
 
 	// override context info with user provided values
-	o.resultingContext.Namespace = o.userSpecifiedNamespace
-
-	if len(o.userSpecifiedCluster) > 0 {
-		o.resultingContext.Cluster = o.userSpecifiedCluster
+	o.resultingContext.Namespace = namespace
+	if cluster := *o.configFlags.ClusterName; cluster != "" {
+		o.resultingContext.Cluster = cluster
 	}
-	if len(o.userSpecifiedAuthInfo) > 0 {
-		o.resultingContext.AuthInfo = o.userSpecifiedAuthInfo
+	if authInfo := *o.configFlags.AuthInfoName; authInfo != "" {
+		o.resultingContext.AuthInfo = authInfo
 	}
 
 	// generate a unique context name based on its new values if
 	// user did not explicitly request a context by name
-	if len(o.userSpecifiedContext) == 0 {
-		o.resultingContextName = generateContextName(o.resultingContext)
+	if o.resultingContextName == "" {
+		o.resultingContextName = generateContextName(o.resultingContext, o.rawConfig.Contexts)
 	}
 
 	return nil
 }
 
-func generateContextName(fromContext *api.Context) string {
-	name := fromContext.Namespace
-	if len(fromContext.Cluster) > 0 {
-		name = fmt.Sprintf("%s/%s", name, fromContext.Cluster)
+// generateContextName returns "<namespace>/<cluster>/<user>", where user is cut at
+// the first "/" (OpenShift-style "user/cluster" names). If that short name is already
+// taken by a context with a different cluster or user, the full user name is kept.
+func generateContextName(ctx *api.Context, contexts map[string]*api.Context) string {
+	shortAuthInfo, _, _ := strings.Cut(ctx.AuthInfo, "/")
+	name := joinNonEmpty(ctx.Namespace, ctx.Cluster, shortAuthInfo)
+	if existing, ok := contexts[name]; ok && !isContextEqual(ctx, existing) {
+		name = joinNonEmpty(ctx.Namespace, ctx.Cluster, ctx.AuthInfo)
 	}
-	if len(fromContext.AuthInfo) > 0 {
-		cleanAuthInfo := strings.Split(fromContext.AuthInfo, "/")[0]
-		name = fmt.Sprintf("%s/%s", name, cleanAuthInfo)
-	}
-
 	return name
+}
+
+func joinNonEmpty(parts ...string) string {
+	return strings.Join(slices.DeleteFunc(parts, func(s string) bool { return s == "" }), "/")
 }
 
 // Validate ensures that all required arguments and flag values are provided
 func (o *NamespaceOptions) Validate() error {
-	if len(o.rawConfig.CurrentContext) == 0 {
+	if o.rawConfig.CurrentContext == "" {
 		return errNoContext
 	}
-	if len(o.args) > 1 {
-		return fmt.Errorf("either one or no arguments are allowed")
-	}
-
 	return nil
 }
 
 // Run lists all available namespaces on a user's KUBECONFIG or updates the
 // current context based on a provided namespace.
 func (o *NamespaceOptions) Run() error {
-	if len(o.userSpecifiedNamespace) > 0 && o.resultingContext != nil {
+	if o.resultingContext != nil {
 		return o.setNamespace(o.resultingContext, o.resultingContextName)
 	}
 
-	namespaces := map[string]bool{}
-
-	for name, c := range o.rawConfig.Contexts {
-		if !o.listNamespaces && name == o.rawConfig.CurrentContext {
-			if len(c.Namespace) == 0 {
-				return fmt.Errorf("no namespace is set for your current context: %q", name)
-			}
-
-			fmt.Fprintf(o.Out, "%s\n", c.Namespace)
-			return nil
-		}
-
-		// skip if dealing with a namespace we have already seen
-		// or if the namespace for the current context is empty
-		if len(c.Namespace) == 0 {
-			continue
-		}
-		if namespaces[c.Namespace] {
-			continue
-		}
-
-		namespaces[c.Namespace] = true
-	}
-
 	if !o.listNamespaces {
-		return fmt.Errorf("unable to find information for the current namespace in your configuration")
+		c, exists := o.rawConfig.Contexts[o.rawConfig.CurrentContext]
+		if !exists {
+			return errors.New("unable to find information for the current namespace in your configuration")
+		}
+		if c.Namespace == "" {
+			return fmt.Errorf("no namespace is set for your current context: %q", o.rawConfig.CurrentContext)
+		}
+		_, err := fmt.Fprintln(o.Out, c.Namespace)
+		return err
 	}
 
-	for n := range namespaces {
-		fmt.Fprintf(o.Out, "%s\n", n)
+	namespaces := map[string]struct{}{}
+	for _, c := range o.rawConfig.Contexts {
+		if c.Namespace != "" {
+			namespaces[c.Namespace] = struct{}{}
+		}
 	}
-
+	for _, n := range slices.Sorted(maps.Keys(namespaces)) {
+		if _, err := fmt.Fprintln(o.Out, n); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -253,17 +214,9 @@ func isContextEqual(ctxA, ctxB *api.Context) bool {
 	if ctxA == nil || ctxB == nil {
 		return false
 	}
-	if ctxA.Cluster != ctxB.Cluster {
-		return false
-	}
-	if ctxA.Namespace != ctxB.Namespace {
-		return false
-	}
-	if ctxA.AuthInfo != ctxB.AuthInfo {
-		return false
-	}
-
-	return true
+	return ctxA.Cluster == ctxB.Cluster &&
+		ctxA.Namespace == ctxB.Namespace &&
+		ctxA.AuthInfo == ctxB.AuthInfo
 }
 
 // setNamespace receives a "desired" context state and determines if a similar context
@@ -271,19 +224,23 @@ func isContextEqual(ctxA, ctxB *api.Context) bool {
 // to the user's config under the provided destination name.
 // The current context field is updated to point to the new context.
 func (o *NamespaceOptions) setNamespace(fromContext *api.Context, withContextName string) error {
-	if len(fromContext.Namespace) == 0 {
-		return fmt.Errorf("a non-empty namespace must be provided")
+	if fromContext.Namespace == "" {
+		return errors.New("a non-empty namespace must be provided")
 	}
-
-	configAccess := clientcmd.NewDefaultPathOptions()
 
 	// determine if we have already saved this context to the user's KUBECONFIG before
 	// if so, simply switch the current context to the existing one.
-	if existingResultingCtx, exists := o.rawConfig.Contexts[withContextName]; !exists || !isContextEqual(fromContext, existingResultingCtx) {
+	if existing, exists := o.rawConfig.Contexts[withContextName]; !exists || !isContextEqual(fromContext, existing) {
 		o.rawConfig.Contexts[withContextName] = fromContext
 	}
 	o.rawConfig.CurrentContext = withContextName
 
-	fmt.Fprintf(o.Out, "namespace changed to %q\n", fromContext.Namespace)
-	return clientcmd.ModifyConfig(configAccess, o.rawConfig, true)
+	// honor --kubeconfig and $KUBECONFIG when writing the result back
+	configAccess := o.configFlags.ToRawKubeConfigLoader().ConfigAccess()
+	if err := clientcmd.ModifyConfig(configAccess, o.rawConfig, true); err != nil {
+		return err
+	}
+
+	_, err := fmt.Fprintf(o.Out, "namespace changed to %q\n", fromContext.Namespace)
+	return err
 }

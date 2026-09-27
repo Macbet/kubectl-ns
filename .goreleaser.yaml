@@ -1,0 +1,52 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/kubectl-ns
+    binary: kubectl-ns
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+# Publishes plugins/change-ns.yaml into this repo, so the repo doubles as a custom krew index:
+#   kubectl krew index add macbet https://github.com/Macbet/kubectl-ns.git
+#   kubectl krew install macbet/change-ns
+# Named change-ns because "ns" in the default index is kubens.
+krews:
+  - name: change-ns
+    skip_upload: auto # don't publish -rc/-beta tags to the index
+    homepage: https://github.com/Macbet/kubectl-ns
+    short_description: View or switch the namespace of the current kubeconfig context
+    description: |
+      Shows the namespace of the current kubeconfig context, lists namespaces
+      used by all contexts, or switches to a context named
+      <namespace>/<cluster>/<user>, creating it if needed.
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "krew: change-ns {{ .Tag }}"
+    repository:
+      owner: Macbet
+      name: kubectl-ns
+      branch: master
+      # PAT for a protected master, see release.yml
+      token: "{{ .Env.KREW_INDEX_TOKEN }}"
