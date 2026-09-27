@@ -8,15 +8,20 @@ Built with Go 1.27, `k8s.io/cli-runtime` / `client-go` v0.37 and cobra v1.
 
 `kubectl ns <namespace>` takes the cluster and user of the current context and switches
 `current-context` to a context named `<namespace>/<cluster>/<user>`, adding it if it
-doesn't exist yet (`<user>` is cut at the first `/`; if that name is already taken by a
-context with another cluster or user, the full user name is used). Other contexts are not touched.
+doesn't exist yet. `<user>` is cut at the first `/` (OpenShift-style `user/cluster` names).
+Other contexts are never overwritten: if that name belongs to a context with different
+settings, the full user name is tried, then a `-2`, `-3`, … suffix.
 
-Exception: with `--context NAME`, the namespace of context `NAME` is updated in place.
+`--cluster` / `--user` replace the cluster / user taken from the current context.
+
+`--context NAME` is the exception that edits in place: context `NAME` gets the new
+namespace (and `--cluster` / `--user`, if given) and becomes `current-context`.
+If `NAME` doesn't exist, it is created from the current context's cluster and user.
 
 ## Installing via Krew
 
 This repository is its own [custom Krew index](https://krew.sigs.k8s.io/docs/user-guide/custom-indexes/):
-every tagged release publishes `plugins/change-ns.yaml` to `master`.
+each release publishes `plugins/change-ns.yaml` to `master`.
 
 ```sh
 kubectl krew index add macbet https://github.com/Macbet/kubectl-ns.git
@@ -32,6 +37,7 @@ Built from source, it is `kubectl ns`. Examples below use `ns`.
 ```sh
 # show the namespace that the current context points to
 kubectl ns
+kubectl ns --context other   # ...or that another context points to
 
 # list all namespaces in use by contexts in your KUBECONFIG
 kubectl ns --list
@@ -41,7 +47,8 @@ kubectl ns --list
 kubectl ns new-namespace
 ```
 
-`--kubeconfig`, `--context`, `--cluster` and `--user` are honored.
+`--kubeconfig` and `$KUBECONFIG` (including multiple files) are honored; changes are
+written back to the file the current context came from.
 
 ## Building from source
 
@@ -59,21 +66,16 @@ git tag v1.0.0 && git push origin v1.0.0
 
 The `release` workflow runs GoReleaser: builds linux/darwin/windows × amd64/arm64,
 creates the GitHub release and commits the updated Krew manifest to `plugins/change-ns.yaml`.
-If `master` is protected, add a `KREW_INDEX_TOKEN` secret (a PAT with `contents: write`
-that may push to `master`); otherwise the built-in `GITHUB_TOKEN` is used.
-In a fork, enable Actions in the repository's Actions tab first.
+
+- Pre-release tags (`v1.1.0-rc.1`) become GitHub pre-releases and are not published to the index.
+- A tag older than the newest release (`v1.0.5` after `v1.1.0`) is released but doesn't
+  roll the index back.
+- Push one tag at a time: queued release runs of several tags pushed together may be cancelled.
+- If `master` is protected, add a `KREW_INDEX_TOKEN` secret (a PAT with `contents: write`
+  that may push to `master`); otherwise the built-in `GITHUB_TOKEN` is used.
+- In a fork, enable Actions in the repository's Actions tab first.
+
 Local dry run: `goreleaser release --snapshot --clean`.
-
-## Use Cases
-
-This plugin can be used as a developer tool, in order to quickly view or change the current namespace
-that kubectl points to.
-
-It can also be used as a means of showcasing usage of the cli-runtime set of utilities to aid in
-third-party plugin development.
-
-This plugin's functionality is similar to that of the [oc project](https://github.com/openshift/origin/blob/master/docs/cli.md#oc-project) command.
-This plugin has been tested against OpenShift and Kubernetes clusters using `kubectl`.
 
 ## Cleanup
 

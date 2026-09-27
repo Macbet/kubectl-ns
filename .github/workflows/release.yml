@@ -22,11 +22,16 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test -race ./...
+      # don't let a patch tag on an older line (v1.0.5 after v1.1.0) roll the krew index back
+      - name: Skip krew publish for non-newest tags
+        run: |
+          newest=$(git tag --list 'v*' --sort=-v:refname | grep -v -- - | head -1)
+          if [ "$GITHUB_REF_NAME" != "$newest" ]; then echo KREW_SKIP=true >> "$GITHUB_ENV"; fi
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # set the KREW_INDEX_TOKEN secret (PAT, contents:write) if master is protected
-          KREW_INDEX_TOKEN: ${{ secrets.KREW_INDEX_TOKEN || secrets.GITHUB_TOKEN }}
+          # if master is protected, set the KREW_INDEX_TOKEN secret: a PAT with
+          # contents:write that may push to master (used for the release too)
+          GITHUB_TOKEN: ${{ secrets.KREW_INDEX_TOKEN || secrets.GITHUB_TOKEN }}

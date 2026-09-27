@@ -154,15 +154,27 @@ func (o *NamespaceOptions) Complete(args []string) error {
 }
 
 // generateContextName returns "<namespace>/<cluster>/<user>", where user is cut at
-// the first "/" (OpenShift-style "user/cluster" names). If that short name is already
-// taken by a context with a different cluster or user, the full user name is kept.
+// the first "/" (OpenShift-style "user/cluster" names). A name already used by a
+// different context is never reused: the full user name is tried next, then "-2", "-3"...
 func generateContextName(ctx *api.Context, contexts map[string]*api.Context) string {
-	shortAuthInfo, _, _ := strings.Cut(ctx.AuthInfo, "/")
-	name := joinNonEmpty(ctx.Namespace, ctx.Cluster, shortAuthInfo)
-	if existing, ok := contexts[name]; ok && !isContextEqual(ctx, existing) {
-		name = joinNonEmpty(ctx.Namespace, ctx.Cluster, ctx.AuthInfo)
+	free := func(name string) bool {
+		existing, ok := contexts[name]
+		return !ok || isContextEqual(ctx, existing)
 	}
-	return name
+
+	shortAuthInfo, _, _ := strings.Cut(ctx.AuthInfo, "/")
+	base := joinNonEmpty(ctx.Namespace, ctx.Cluster, shortAuthInfo)
+	if free(base) {
+		return base
+	}
+	if full := joinNonEmpty(ctx.Namespace, ctx.Cluster, ctx.AuthInfo); free(full) {
+		return full
+	}
+	for i := 2; ; i++ {
+		if name := fmt.Sprintf("%s-%d", base, i); free(name) {
+			return name
+		}
+	}
 }
 
 func joinNonEmpty(parts ...string) string {
@@ -171,7 +183,7 @@ func joinNonEmpty(parts ...string) string {
 
 // Validate ensures that all required arguments and flag values are provided
 func (o *NamespaceOptions) Validate() error {
-	if o.rawConfig.CurrentContext == "" {
+	if o.rawConfig.CurrentContext == "" && *o.configFlags.Context == "" {
 		return errNoContext
 	}
 	return nil
@@ -185,12 +197,16 @@ func (o *NamespaceOptions) Run() error {
 	}
 
 	if !o.listNamespaces {
-		c, exists := o.rawConfig.Contexts[o.rawConfig.CurrentContext]
+		name := o.rawConfig.CurrentContext
+		if *o.configFlags.Context != "" {
+			name = *o.configFlags.Context
+		}
+		c, exists := o.rawConfig.Contexts[name]
 		if !exists {
-			return errors.New("unable to find information for the current namespace in your configuration")
+			return fmt.Errorf("context %q not found in your configuration", name)
 		}
 		if c.Namespace == "" {
-			return fmt.Errorf("no namespace is set for your current context: %q", o.rawConfig.CurrentContext)
+			return fmt.Errorf("no namespace is set for context %q", name)
 		}
 		_, err := fmt.Fprintln(o.Out, c.Namespace)
 		return err

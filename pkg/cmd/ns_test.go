@@ -53,6 +53,7 @@ func load(t *testing.T, path string) *api.Config {
 
 func TestNamespace(t *testing.T) {
 	t.Setenv("KUBECONFIG", "")
+	t.Setenv("HOME", t.TempDir())
 	path := writeKubeconfig(t, baseConfig())
 
 	if out, err := run(t, "--kubeconfig", path); err != nil || out != "zeta\n" {
@@ -89,6 +90,7 @@ func TestNamespace(t *testing.T) {
 
 func TestNamespaceFlags(t *testing.T) {
 	t.Setenv("KUBECONFIG", "")
+	t.Setenv("HOME", t.TempDir())
 	path := writeKubeconfig(t, baseConfig())
 
 	// --cluster/--user override the current context's values
@@ -100,6 +102,11 @@ func TestNamespaceFlags(t *testing.T) {
 		t.Fatalf("current-context = %q, %+v", cfg.CurrentContext, got)
 	}
 
+	// view mode honors --context
+	if out, err := run(t, "--kubeconfig", path, "--context", "ops"); err != nil || out != "alpha\n" {
+		t.Fatalf("view --context: got %q, %v", out, err)
+	}
+
 	// --context updates the named context in place
 	if _, err := run(t, "--kubeconfig", path, "--context", "ops", "gamma"); err != nil {
 		t.Fatal(err)
@@ -107,6 +114,15 @@ func TestNamespaceFlags(t *testing.T) {
 	cfg = load(t, path)
 	if cfg.CurrentContext != "ops" || cfg.Contexts["ops"].Namespace != "gamma" || cfg.Contexts["ops"].Cluster != "c1" {
 		t.Fatalf("current-context = %q, ops = %+v", cfg.CurrentContext, cfg.Contexts["ops"])
+	}
+
+	// --context with an unknown name creates it from the current context's cluster and user
+	if _, err := run(t, "--kubeconfig", path, "--context", "fresh", "delta"); err != nil {
+		t.Fatal(err)
+	}
+	cfg = load(t, path)
+	if got := cfg.Contexts["fresh"]; cfg.CurrentContext != "fresh" || got == nil || got.Namespace != "delta" || got.Cluster != "c1" || got.AuthInfo != "admin/c1" {
+		t.Fatalf("current-context = %q, fresh = %+v", cfg.CurrentContext, got)
 	}
 }
 
@@ -119,6 +135,7 @@ func TestNamespaceMultiFileKubeconfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("KUBECONFIG", first+string(filepath.ListSeparator)+second)
+	t.Setenv("HOME", t.TempDir())
 
 	if _, err := run(t, "beta"); err != nil {
 		t.Fatal(err)
@@ -149,6 +166,34 @@ func TestGenerateContextNameCollision(t *testing.T) {
 	}
 	if got := generateContextName(b, contexts); got != "ns/c/admin/b" {
 		t.Fatalf("colliding context must get the full user name, got %q", got)
+	}
+
+	// user without "/": full name equals the short one, so a suffix is needed
+	plain := &api.Context{Namespace: "ns", Cluster: "c", AuthInfo: "admin"}
+	if got := generateContextName(plain, contexts); got != "ns/c/admin-2" {
+		t.Fatalf("got %q", got)
+	}
+	contexts["ns/c/admin-2"] = b
+	if got := generateContextName(plain, contexts); got != "ns/c/admin-3" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSwitchNeverOverwritesOtherContext(t *testing.T) {
+	t.Setenv("KUBECONFIG", "")
+	t.Setenv("HOME", t.TempDir())
+	cfg := baseConfig()
+	cfg.AuthInfos["admin"] = &api.AuthInfo{Token: "z"}
+	cfg.Contexts["dev"].AuthInfo = "admin"
+	cfg.Contexts["beta/c1/admin"] = &api.Context{Cluster: "c1", AuthInfo: "admin/c1", Namespace: "beta"}
+	path := writeKubeconfig(t, cfg)
+
+	if _, err := run(t, "--kubeconfig", path, "beta"); err != nil {
+		t.Fatal(err)
+	}
+	got := load(t, path)
+	if got.CurrentContext != "beta/c1/admin-2" || got.Contexts["beta/c1/admin"].AuthInfo != "admin/c1" {
+		t.Fatalf("current-context = %q, contexts = %v", got.CurrentContext, got.Contexts)
 	}
 }
 

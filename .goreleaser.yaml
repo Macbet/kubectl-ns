@@ -24,6 +24,9 @@ archives:
     files:
       - LICENSE
 
+release:
+  prerelease: auto # -rc/-beta tags become GitHub pre-releases, not "Latest"
+
 checksum:
   name_template: checksums.txt
 
@@ -33,7 +36,8 @@ checksum:
 # Named change-ns because "ns" in the default index is kubens.
 krews:
   - name: change-ns
-    skip_upload: auto # don't publish -rc/-beta tags to the index
+    # skip -rc/-beta tags, and tags older than the newest release (KREW_SKIP, set in release.yml)
+    skip_upload: '{{ if eq (envOrDefault "KREW_SKIP" "") "true" }}true{{ else }}auto{{ end }}'
     homepage: https://github.com/Macbet/kubectl-ns
     short_description: View or switch the namespace of the current kubeconfig context
     description: |
@@ -47,6 +51,4 @@ krews:
     repository:
       owner: Macbet
       name: kubectl-ns
-      branch: master
-      # PAT for a protected master, see release.yml
-      token: "{{ .Env.KREW_INDEX_TOKEN }}"
+      branch: master # pushed with GITHUB_TOKEN, see release.yml for protected master
